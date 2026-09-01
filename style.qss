@@ -1,0 +1,256 @@
+/* ===================================================================
+   GLASSMORPHISM / OVERWATCH DESIGN SYSTEM STYLESHEET (QSS)
+   Targeting PyQt6 Widgets - Modern Dark Slate Aesthetic
+   =================================================================== */
+
+/* Global Reset & Base Fonts */
+QWidget {
+    font-family: 'Segoe UI', 'Inter', -apple-system, sans-serif;
+    color: #F8FAFC;
+    font-size: 13px;
+}
+
+/* Main Application Window */
+QMainWindow {
+    background-color: #0F172A;
+}
+
+/* Scroll Area Styling */
+QScrollArea {
+    border: none;
+    background-color: transparent;
+}
+
+QScrollBar:vertical {
+    border: none;
+    background: rgba(15, 23, 42, 0.4);
+    width: 8px;
+    border-radius: 4px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: rgba(255, 255, 255, 0.2);
+    min-height: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: rgba(0, 243, 255, 0.5);
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* Glassmorphism Sidebar */
+#SidebarFrame {
+    background-color: rgba(30, 41, 59, 0.65);
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    border-top-right-radius: 0px;
+    border-bottom-right-radius: 0px;
+}
+
+#SidebarButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 12px;
+    color: #94A3B8;
+    text-align: left;
+    font-weight: 600;
+}
+
+#SidebarButton:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #F8FAFC;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+#SidebarButton:checked, #SidebarButton[active="true"] {
+    background-color: rgba(0, 243, 255, 0.15);
+    color: #00F3FF;
+    border: 1px solid rgba(0, 243, 255, 0.4);
+}
+
+/* Header Navbar Bar */
+#HeaderFrame {
+    background-color: rgba(30, 41, 59, 0.5);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 12px 24px;
+}
+
+#HeaderTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #FFFFFF;
+    letter-spacing: 0.5px;
+}
+
+#HeaderBadge {
+    background-color: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #94A3B8;
+}
+
+/* Glass Card Component */
+#StreamCard {
+    background-color: rgba(30, 41, 59, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+}
+
+#StreamCard:hover {
+    background-color: rgba(30, 41, 59, 0.75);
+    border: 1px solid rgba(0, 243, 255, 0.4);
+}
+
+#CardHeader {
+    background-color: rgba(15, 23, 42, 0.4);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-top-left-radius: 15px;
+    border-top-right-radius: 15px;
+    padding: 8px 14px;
+}
+
+#ClientNameLabel {
+    font-size: 14px;
+    font-weight: 600;
+    color: #F8FAFC;
+}
+
+#ClientIPLabel {
+    font-size: 11px;
+    color: #64748B;
+}
+
+/* Neon Status Indicators */
+#StatusDot[status="active"] {
+    background-color: #10B981;
+    border-radius: 5px;
+    min-width: 10px;
+    max-width: 10px;
+    min-height: 10px;
+    max-height: 10px;
+}
+
+#StatusDot[status="idle"] {
+    background-color: #F59E0B;
+    border-radius: 5px;
+    min-width: 10px;
+    max-width: 10px;
+    min-height: 10px;
+    max-height: 10px;
+}
+
+#StatusDot[status="offline"] {
+    background-color: #EF4444;
+    border-radius: 5px;
+    min-width: 10px;
+    max-width: 10px;
+    min-height: 10px;
+    max-height: 10px;
+}
+
+/* Glass Buttons */
+QPushButton.GlassButton {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    color: #F1F5F9;
+    padding: 8px 16px;
+    font-weight: 600;
+}
+
+QPushButton.GlassButton:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: #FFFFFF;
+}
+
+QPushButton.GlassButton:pressed {
+    background-color: rgba(0, 243, 255, 0.25);
+    border: 1px solid rgba(0, 243, 255, 0.5);
+}
+
+QPushButton.GlassButtonPrimary {
+    background-color: rgba(0, 243, 255, 0.15);
+    border: 1px solid rgba(0, 243, 255, 0.4);
+    border-radius: 10px;
+    color: #00F3FF;
+    padding: 8px 16px;
+    font-weight: 700;
+}
+
+QPushButton.GlassButtonPrimary:hover {
+    background-color: rgba(0, 243, 255, 0.3);
+    border: 1px solid rgba(0, 243, 255, 0.7);
+    color: #FFFFFF;
+}
+
+/* Stats Badges Overlay */
+#StatsOverlay {
+    background-color: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #00F3FF;
+    font-weight: 600;
+}
+
+/* Modal Dialog Glass Overlay */
+QDialog {
+    background-color: #0F172A;
+}
+
+#FloatingActionBar {
+    background-color: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 24px;
+    padding: 6px 18px;
+}
+
+/* Form Controls & Inputs */
+QLineEdit, QComboBox, QSpinBox {
+    background-color: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #F8FAFC;
+}
+
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 1px solid rgba(0, 243, 255, 0.6);
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+
+/* Sliders */
+QSlider::groove:horizontal {
+    border: none;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+}
+
+QSlider::sub-page:horizontal {
+    background: #00F3FF;
+    border-radius: 3px;
+}
+
+QSlider::handle:horizontal {
+    background: #FFFFFF;
+    border: 2px solid #00F3FF;
+    width: 16px;
+    height: 16px;
+    margin: -5px 0;
+    border-radius: 8px;
+}
