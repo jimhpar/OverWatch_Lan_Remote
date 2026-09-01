@@ -24,14 +24,12 @@ def build_mac():
         print("Installing PyInstaller...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
 
-    # Icon handling (.icns preferred on macOS, fallback to .ico)
+    # Icon handling (.icns preferred on macOS, fallback without --icon flag to avoid format error)
     icon_args = []
     if os.path.exists("app_icon.icns"):
         icon_args = ["--icon=app_icon.icns"]
-    elif os.path.exists("app_icon.ico"):
-        icon_args = ["--icon=app_icon.ico"]
 
-    # PyInstaller data delimiter on macOS is ':'
+    # PyInstaller data delimiter on macOS/Linux is ':'
     cmd = [
         sys.executable,
         "-m",
@@ -70,10 +68,11 @@ def build_mac():
     app_path = os.path.join("dist", "Overwatch.app")
     print(f"\nSUCCESS: macOS Application bundle created at '{app_path}'!")
 
-    # Create .dmg installer if running on macOS
+    # Create .dmg and .zip on macOS
     if sys.platform == "darwin":
         dmg_path = os.path.join("dist", "Overwatch-macOS.dmg")
-        print("\nPackaging .dmg disk image...")
+        zip_path = os.path.join("dist", "Overwatch-macOS.zip")
+        print("\nPackaging .dmg disk image and .zip archive...")
         try:
             if os.path.exists(dmg_path):
                 os.remove(dmg_path)
@@ -87,7 +86,18 @@ def build_mac():
             ], check=True)
             print(f"SUCCESS: Installer created at '{dmg_path}'!")
         except Exception as e:
-            print(f"Notice: .dmg creation skipped ({e}). You can distribute '{app_path}' directly.")
+            print(f"Notice: .dmg creation skipped ({e}).")
+
+        try:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            subprocess.run([
+                "ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
+                app_path, zip_path
+            ], check=True)
+            print(f"SUCCESS: Zip archive created at '{zip_path}'!")
+        except Exception as e:
+            print(f"Notice: .zip creation skipped ({e}).")
 
     print("\n==================================================")
     print("Build complete!")
