@@ -1066,6 +1066,7 @@ class EmployeeClientTrayApp(QWidget):
         self.server_ip = Config.get_local_ip()
         self.server_port = Config.DEFAULT_PORT
         self.client_name = socket.gethostname()
+        self.local_ip = Config.get_local_ip()
         self.passcode = Config.AUTH_TOKEN
 
         self.worker = None
@@ -1166,7 +1167,7 @@ class EmployeeClientTrayApp(QWidget):
 
     def rebuild_users_menu(self):
         self.users_menu.clear()
-        my_id = f"{socket.gethostname()}_{self.local_ip}"
+        my_id = f"{socket.gethostname()}_{getattr(self, 'local_ip', Config.get_local_ip())}"
 
         filtered_peers = []
         seen = set()
