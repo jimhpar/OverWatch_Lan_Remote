@@ -1,6 +1,6 @@
 # 🛡️ Overwatch - LAN Live Screen Monitoring & Remote Management System
 
-[![Version](https://img.shields.io/badge/version-2.105.0-blue.svg?style=flat-square)](https://github.com/jimhpar/OverWatch_Mac/releases)
+[![Version](https://img.shields.io/badge/version-4.50.1-blue.svg?style=flat-square)](https://github.com/jimhpar/OverWatch_Mac/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-informational.svg?style=flat-square)](https://github.com/jimhpar/OverWatch_Mac/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-success.svg?style=flat-square)](https://www.python.org/)
 [![GUI Framework](https://img.shields.io/badge/GUI-PyQt6-blueviolet.svg?style=flat-square)](https://www.riverbankcomputing.com/software/pyqt/)
@@ -77,7 +77,7 @@
 
 ### 🪟 Windows Deployment
 1. Download the latest installer from the **[Releases Page](https://github.com/jimhpar/OverWatch_Mac/releases)**:
-   - 📦 **`Overwatch-2.105.0-win64.msi`** (Installs to `C:\Program Files\Overwatch\` with Desktop & Start Menu shortcuts).
+   - 📦 **`Overwatch-4.50.1-win64.msi`** (Installs to `C:\Program Files\Overwatch\` with Desktop & Start Menu shortcuts).
    - ⚡ **`Overwatch.exe`** (Portable standalone single-file executable).
 2. Run the application and choose **Manager Mode** for the administrator PC or **Client Mode** for employee PCs.
 

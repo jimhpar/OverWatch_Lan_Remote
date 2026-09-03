@@ -5,7 +5,7 @@ class Config:
     # Application Branding & Metadata
     APP_NAME = "Overwatch"
     APP_TITLE = "Overwatch - LAN Live Screen Monitor"
-    VERSION = "2.105.0"
+    VERSION = "4.50.1"
 
     # Network Server Configuration
     DEFAULT_HOST = "0.0.0.0"

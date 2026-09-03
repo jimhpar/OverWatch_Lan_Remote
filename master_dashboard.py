@@ -8,11 +8,124 @@ import socket
 import threading
 import traceback
 import subprocess
-import ctypes
 import numpy as np
 import cv2
 import websockets
 import websockets.exceptions
+
+if sys.platform == "win32":
+    import ctypes
+    import ctypes.wintypes as wintypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [('x', wintypes.LONG), ('y', wintypes.LONG)]
+
+    class CURSORINFO(ctypes.Structure):
+        _fields_ = [
+            ('cbSize', wintypes.DWORD),
+            ('flags', wintypes.DWORD),
+            ('hCursor', wintypes.HANDLE),
+            ('ptScreenPos', POINT)
+        ]
+
+    class ICONINFO(ctypes.Structure):
+        _fields_ = [
+            ('fIcon', wintypes.BOOL),
+            ('xHotspot', wintypes.DWORD),
+            ('yHotspot', wintypes.DWORD),
+            ('hbmMask', wintypes.HBITMAP),
+            ('hbmColor', wintypes.HBITMAP)
+        ]
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ('biSize', wintypes.DWORD),
+            ('biWidth', wintypes.LONG),
+            ('biHeight', wintypes.LONG),
+            ('biPlanes', wintypes.WORD),
+            ('biBitCount', wintypes.WORD),
+            ('biCompression', wintypes.DWORD),
+            ('biSizeImage', wintypes.DWORD),
+            ('biXPelsPerMeter', wintypes.LONG),
+            ('biYPelsPerMeter', wintypes.LONG),
+            ('biClrUsed', wintypes.DWORD),
+            ('biClrImportant', wintypes.DWORD)
+        ]
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    user32.GetCursorInfo.argtypes = [ctypes.POINTER(CURSORINFO)]
+    user32.GetCursorInfo.restype = wintypes.BOOL
+    user32.GetIconInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(ICONINFO)]
+    user32.GetIconInfo.restype = wintypes.BOOL
+    gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+
+    def capture_active_cursor(cursor_size=32):
+        """Captures active Windows cursor bitmap (Photoshop, Illustrator, CAD tools) & hotspot."""
+        try:
+            hdesk = user32.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                user32.SetThreadDesktop(hdesk)
+
+            ci = CURSORINFO()
+            ci.cbSize = ctypes.sizeof(CURSORINFO)
+            if not user32.GetCursorInfo(ctypes.byref(ci)) or not ci.hCursor or not (ci.flags & 1):
+                return None, 0, 0, None
+
+            cursor_handle_id = str(ci.hCursor)
+
+            ii = ICONINFO()
+            if not user32.GetIconInfo(ci.hCursor, ctypes.byref(ii)):
+                return cursor_handle_id, 0, 0, None
+
+            hx, hy = int(ii.xHotspot), int(ii.yHotspot)
+
+            hdc_screen = user32.GetDC(0)
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+
+            bih = BITMAPINFOHEADER()
+            bih.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bih.biWidth = cursor_size
+            bih.biHeight = -cursor_size
+            bih.biPlanes = 1
+            bih.biBitCount = 32
+            bih.biCompression = 0
+
+            p_bits = ctypes.c_void_p()
+            hbmp = gdi32.CreateDIBSection(hdc_screen, ctypes.byref(bih), 0, ctypes.byref(p_bits), 0, 0)
+            old_bmp = gdi32.SelectObject(hdc_mem, hbmp)
+
+            user32.DrawIconEx(hdc_mem, 0, 0, ci.hCursor, cursor_size, cursor_size, 0, 0, 0x0003)
+
+            buf = (ctypes.c_ubyte * (cursor_size * cursor_size * 4)).from_address(p_bits.value)
+            arr = np.frombuffer(buf, dtype=np.uint8).reshape((cursor_size, cursor_size, 4)).copy()
+
+            # If alpha channel is all zeros (monochrome / standard inverted cursor), create alpha from RGB presence
+            if not np.any(arr[:, :, 3] > 0):
+                rgb_sum = np.sum(arr[:, :, :3], axis=2)
+                arr[:, :, 3] = np.where(rgb_sum > 0, 255, 0).astype(np.uint8)
+
+            gdi32.SelectObject(hdc_mem, old_bmp)
+            gdi32.DeleteObject(hbmp)
+            gdi32.DeleteDC(hdc_mem)
+            user32.ReleaseDC(0, hdc_screen)
+            if ii.hbmColor:
+                gdi32.DeleteObject(ii.hbmColor)
+            if ii.hbmMask:
+                gdi32.DeleteObject(ii.hbmMask)
+
+            success, png_bytes = cv2.imencode('.png', arr)
+            if success:
+                b64_png = base64.b64encode(png_bytes.tobytes()).decode('utf-8')
+                return cursor_handle_id, hx, hy, b64_png
+            return cursor_handle_id, hx, hy, None
+        except Exception:
+            return None, 0, 0, None
+else:
+    def capture_active_cursor(cursor_size=32):
+        return None, 0, 0, None
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -172,6 +285,7 @@ class AdminScreenCapturer(threading.Thread):
         self.running = True
         self.sct = mss.mss()
         self.monitor = self.sct.monitors[1]
+        self.last_cursor_id = None
 
     def stop(self):
         self.running = False
@@ -207,7 +321,15 @@ class AdminScreenCapturer(threading.Thread):
                 success, encoded_img = cv2.imencode('.jpg', frame_to_encode, encode_param)
                 if success:
                     frame_bytes = encoded_img.tobytes()
-                    self.server_thread.broadcast_admin_frame(frame_bytes, current_fps, w, h)
+                    cursor_data = None
+                    cid, hx, hy, b64_png = capture_active_cursor()
+                    if cid:
+                        if cid != self.last_cursor_id:
+                            self.last_cursor_id = cid
+                            cursor_data = {"id": cid, "hx": hx, "hy": hy, "png": b64_png}
+                        else:
+                            cursor_data = {"id": cid, "hx": hx, "hy": hy}
+                    self.server_thread.broadcast_admin_frame(frame_bytes, current_fps, w, h, cursor_data=cursor_data)
 
                 fps_counter += 1
                 now = time.time()
@@ -231,6 +353,7 @@ class MasterWebSocketServer(QThread):
     frame_received = pyqtSignal(str, bytes, dict)  # client_id, image_bytes, metadata
     log_emitted = pyqtSignal(str)
     share_state_changed = pyqtSignal()
+    peer_requests_updated = pyqtSignal()
 
     def __init__(self, host=Config.DEFAULT_HOST, port=Config.DEFAULT_PORT):
         super().__init__()
@@ -238,7 +361,9 @@ class MasterWebSocketServer(QThread):
         self.port = port
         self.running = True
         self.active_clients = {} # client_id -> websocket
+        self.client_info = {}    # client_id -> {"name": str, "hostname": str, "ip": str}
         self.share_sessions = {} # session_id -> { "source_id": str, "source_name": str, "targets": set([client_id, ...]), "allow_remote": bool }
+        self.pending_peer_requests = {} # req_id -> dict
         self.admin_input_handler = RemoteInputHandler()
         self.loop = None
 
@@ -284,12 +409,16 @@ class MasterWebSocketServer(QThread):
             await websocket.send(quality_pkt)
 
             self.active_clients[client_id] = websocket
-            self.client_connected.emit(client_id, {
+            self.client_info[client_id] = {
                 "name": client_name,
                 "hostname": hostname,
                 "ip": ip_address
-            })
+            }
+            self.client_connected.emit(client_id, self.client_info[client_id])
             self.log_emitted.emit(f"Client connected: {client_id} ({ip_address})")
+
+            # Broadcast updated client list to all peers
+            self.broadcast_client_list()
 
             # 2. Main Receive Loop
             async for message in websocket:
@@ -302,11 +431,13 @@ class MasterWebSocketServer(QThread):
                     b64_frame = data.get("frame")
                     if b64_frame:
                         frame_bytes = base64.b64decode(b64_frame)
+                        cursor_data = data.get("cursor")
                         metadata = {
                             "fps": data.get("fps", 0),
                             "width": data.get("width", 1920),
                             "height": data.get("height", 1080),
                             "is_static": data.get("is_static", False),
+                            "cursor": cursor_data,
                             "timestamp": data.get("timestamp", time.time())
                         }
                         self.frame_received.emit(client_id, frame_bytes, metadata)
@@ -321,10 +452,63 @@ class MasterWebSocketServer(QThread):
                                     fps=metadata.get("fps", 0),
                                     width=metadata.get("width", 1920),
                                     height=metadata.get("height", 1080),
-                                    is_static=metadata.get("is_static", False)
+                                    is_static=metadata.get("is_static", False),
+                                    cursor_data=cursor_data
                                 )
                                 for tid in list(sess_data.get("targets", [])):
                                     self.send_to_client(tid, share_pkt)
+
+                elif pkt_type == PacketType.PEER_SHARE_REQ:
+                    req_id = f"req_{int(time.time()*1000)}"
+                    req_src = data.get("requester_id", client_id)
+                    req_name = data.get("requester_name", self.client_info.get(client_id, {}).get("name", "User"))
+                    target_id = data.get("target_id")
+                    mode = data.get("mode", "view")
+                    target_name = self.client_info.get(target_id, {}).get("name", target_id)
+
+                    if target_id and target_id in self.active_clients:
+                        self.pending_peer_requests[req_id] = {
+                            "request_id": req_id,
+                            "requester_id": req_src,
+                            "requester_name": req_name,
+                            "target_id": target_id,
+                            "target_name": target_name,
+                            "mode": mode,
+                            "timestamp": time.time()
+                        }
+                        self.peer_requests_updated.emit()
+                        prompt_pkt = Protocol.create_peer_prompt_request(
+                            request_id=req_id,
+                            requester_id=req_src,
+                            requester_name=req_name,
+                            target_id=target_id,
+                            target_name=target_name,
+                            mode=mode
+                        )
+                        self.send_to_client(target_id, prompt_pkt)
+
+                elif pkt_type == PacketType.PEER_PROMPT_RESP:
+                    req_id = data.get("request_id")
+                    req_src = data.get("requester_id")
+                    target_id = data.get("target_id", client_id)
+                    accepted = data.get("accepted", False)
+                    mode = data.get("mode", "view")
+                    target_name = self.client_info.get(target_id, {}).get("name", "Target PC")
+
+                    if req_id in self.pending_peer_requests:
+                        del self.pending_peer_requests[req_id]
+                        self.peer_requests_updated.emit()
+
+                    if accepted:
+                        self.start_share_session(
+                            source_id=target_id,
+                            source_name=target_name,
+                            target_ids=[req_src],
+                            allow_remote=(mode == "control")
+                        )
+                    else:
+                        dec_pkt = Protocol.create_peer_request_declined(target_name, "User declined the request.")
+                        self.send_to_client(req_src, dec_pkt)
 
                 elif pkt_type == PacketType.SHARE_STREAM_INPUT:
                     sess_id = data.get("session_id")
@@ -347,9 +531,34 @@ class MasterWebSocketServer(QThread):
         finally:
             if client_id and client_id in self.active_clients:
                 del self.active_clients[client_id]
+            if client_id and client_id in self.client_info:
+                del self.client_info[client_id]
+
+            # Clear pending requests related to this client
+            for r_id, r in list(self.pending_peer_requests.items()):
+                if r.get("requester_id") == client_id or r.get("target_id") == client_id:
+                    del self.pending_peer_requests[r_id]
+
+            self.peer_requests_updated.emit()
+            if client_id:
                 self.stop_all_shares_for_client(client_id)
                 self.client_disconnected.emit(client_id)
                 self.log_emitted.emit(f"Client disconnected: {client_id}")
+            self.broadcast_client_list()
+
+    def broadcast_client_list(self):
+        """Dispatch list of all active online clients to all connected peers."""
+        c_list = []
+        for cid, info in self.client_info.items():
+            if cid in self.active_clients:
+                c_list.append({
+                    "client_id": cid,
+                    "name": info.get("name", "Employee PC"),
+                    "hostname": info.get("hostname", "Host"),
+                    "ip": info.get("ip", "0.0.0.0")
+                })
+        pkt = Protocol.create_client_list_update(c_list)
+        self.broadcast(pkt)
 
     def send_to_client(self, client_id, packet_str):
         """Thread-safe call to dispatch message to client."""
@@ -410,12 +619,49 @@ class MasterWebSocketServer(QThread):
     def has_active_admin_share(self):
         return any(s.get("source_id") == "ADMIN_PC" for s in self.share_sessions.values())
 
-    def broadcast_admin_frame(self, frame_bytes, fps, width, height):
+    def broadcast_admin_frame(self, frame_bytes, fps, width, height, cursor_data=None):
         for sess_id, sess in list(self.share_sessions.items()):
             if sess.get("source_id") == "ADMIN_PC":
-                pkt = Protocol.create_share_frame(sess_id, "ADMIN_PC", frame_bytes, fps, width, height)
+                pkt = Protocol.create_share_frame(sess_id, "ADMIN_PC", frame_bytes, fps, width, height, cursor_data=cursor_data)
                 for tid in list(sess.get("targets", [])):
                     self.send_to_client(tid, pkt)
+
+    def admin_approve_peer_request(self, req_id):
+        if req_id in self.pending_peer_requests:
+            req = self.pending_peer_requests.pop(req_id)
+            self.peer_requests_updated.emit()
+            target_id = req.get("target_id")
+            requester_id = req.get("requester_id")
+            target_name = req.get("target_name")
+            mode = req.get("mode", "view")
+
+            # Close popup on target client
+            resolved_pkt = Protocol.create_peer_request_resolved(req_id)
+            self.send_to_client(target_id, resolved_pkt)
+
+            # Start share session
+            self.start_share_session(
+                source_id=target_id,
+                source_name=target_name,
+                target_ids=[requester_id],
+                allow_remote=(mode == "control")
+            )
+
+    def admin_reject_peer_request(self, req_id):
+        if req_id in self.pending_peer_requests:
+            req = self.pending_peer_requests.pop(req_id)
+            self.peer_requests_updated.emit()
+            target_id = req.get("target_id")
+            requester_id = req.get("requester_id")
+            target_name = req.get("target_name")
+
+            # Close popup on target client
+            resolved_pkt = Protocol.create_peer_request_resolved(req_id)
+            self.send_to_client(target_id, resolved_pkt)
+
+            # Send decline to requester
+            dec_pkt = Protocol.create_peer_request_declined(target_name, "Admin declined the request.")
+            self.send_to_client(requester_id, dec_pkt)
 
     def stop(self):
         self.running = False
@@ -629,6 +875,8 @@ class SingleStreamModal(QDialog):
         self.last_frame_bytes = None
         self.last_metadata = {}
         self.normal_geometry = None
+        self.cursor_cache = {}
+        self.current_remote_cursor = None
 
         self.setWindowTitle(f"Live Stream - {self.info.get('name')} ({self.info.get('ip')})")
         
@@ -764,6 +1012,29 @@ class SingleStreamModal(QDialog):
         fps = metadata.get("fps", 0)
         self.stats_lbl.setText(f"{fps:.1f} FPS | Res: {self.last_frame_size[0]}x{self.last_frame_size[1]}")
 
+        # Update remote cursor for Photoshop / design tools
+        cursor_info = metadata.get("cursor")
+        if cursor_info:
+            cid = cursor_info.get("id")
+            hx = cursor_info.get("hx", 0)
+            hy = cursor_info.get("hy", 0)
+            png_b64 = cursor_info.get("png")
+            if png_b64:
+                try:
+                    png_data = base64.b64decode(png_b64)
+                    qimg = QImage.fromData(png_data)
+                    qpix = QPixmap.fromImage(qimg)
+                    qcur = QCursor(qpix, hx, hy)
+                    self.cursor_cache[cid] = qcur
+                    self.current_remote_cursor = qcur
+                except Exception:
+                    pass
+            elif cid in self.cursor_cache:
+                self.current_remote_cursor = self.cursor_cache[cid]
+
+            if self.remote_control_enabled and self.current_remote_cursor:
+                self.viewport.setCursor(self.current_remote_cursor)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.render_frame()
@@ -780,6 +1051,8 @@ class SingleStreamModal(QDialog):
             self.rc_btn.setStyleSheet("background-color: rgba(16, 185, 129, 0.3); border: 1px solid #10B981; color: #10B981;")
             self.viewport.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             self.viewport.setFocus()
+            if self.current_remote_cursor:
+                self.viewport.setCursor(self.current_remote_cursor)
         else:
             self.rc_btn.setText("🎮 Remote Control: OFF")
             self.rc_btn.setStyleSheet("")
@@ -1151,6 +1424,136 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
+class PeerRequestNotificationPopup(QFrame):
+    """Dropdown overlay panel attached beneath the bell icon showing active pending peer requests."""
+    def __init__(self, server_thread, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.server_thread = server_thread
+        self.setObjectName("NotificationPopup")
+        self.setFixedWidth(360)
+        self.setStyleSheet("""
+            QFrame#NotificationPopup {
+                background-color: rgba(15, 23, 42, 0.98);
+                border: 2px solid rgba(0, 243, 255, 0.6);
+                border-radius: 12px;
+            }
+            QLabel {
+                color: #F8FAFC;
+                font-family: 'Segoe UI', 'Inter', sans-serif;
+            }
+        """)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(16, 16, 16, 16)
+        self.layout.setSpacing(12)
+        self.refresh_ui()
+
+    def refresh_ui(self):
+        # Clear layout
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Header
+        hdr_box = QHBoxLayout()
+        title_lbl = QLabel("🔔 Screen Access Requests", self)
+        title_lbl.setStyleSheet("font-weight: 800; font-size: 14px; color: #00F3FF;")
+        hdr_box.addWidget(title_lbl)
+        hdr_box.addStretch()
+
+        count = len(self.server_thread.pending_peer_requests)
+        cnt_lbl = QLabel(f"{count} pending", self)
+        cnt_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        hdr_box.addWidget(cnt_lbl)
+        self.layout.addLayout(hdr_box)
+
+        if not self.server_thread.pending_peer_requests:
+            empty_lbl = QLabel("No pending screen access requests.", self)
+            empty_lbl.setStyleSheet("color: #64748B; font-style: italic; padding: 12px 0;")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.layout.addWidget(empty_lbl)
+        else:
+            for req_id, req in list(self.server_thread.pending_peer_requests.items()):
+                req_card = QFrame(self)
+                req_card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(30, 41, 59, 0.85);
+                        border: 1px solid #334155;
+                        border-radius: 8px;
+                    }
+                """)
+                card_vbox = QVBoxLayout(req_card)
+                card_vbox.setContentsMargins(10, 10, 10, 10)
+                card_vbox.setSpacing(8)
+
+                mode_str = "🎮 Remote Control" if req.get("mode") == "control" else "👁️ Screen View"
+                info_lbl = QLabel(
+                    f"<b>{req.get('requester_name')}</b> ➔ <b>{req.get('target_name')}</b><br>"
+                    f"<span style='color: #00F3FF; font-size: 11px;'>Requesting {mode_str}</span>",
+                    req_card
+                )
+                info_lbl.setWordWrap(True)
+                card_vbox.addWidget(info_lbl)
+
+                btn_row = QHBoxLayout()
+                btn_row.setSpacing(8)
+
+                reject_btn = QPushButton("❌ Reject", req_card)
+                reject_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(239, 68, 68, 0.2);
+                        border: 1px solid #EF4444;
+                        border-radius: 6px;
+                        color: #EF4444;
+                        font-weight: 700;
+                        padding: 5px 10px;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(239, 68, 68, 0.45);
+                        color: #FFFFFF;
+                    }
+                """)
+                reject_btn.clicked.connect(lambda checked, rid=req_id: self.reject_request(rid))
+                btn_row.addWidget(reject_btn)
+
+                approve_btn = QPushButton("✅ Approve", req_card)
+                approve_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: rgba(16, 185, 129, 0.25);
+                        border: 1px solid #10B981;
+                        border-radius: 6px;
+                        color: #10B981;
+                        font-weight: 700;
+                        padding: 5px 10px;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: rgba(16, 185, 129, 0.5);
+                        color: #FFFFFF;
+                    }
+                """)
+                approve_btn.clicked.connect(lambda checked, rid=req_id: self.approve_request(rid))
+                btn_row.addWidget(approve_btn)
+
+                card_vbox.addLayout(btn_row)
+                self.layout.addWidget(req_card)
+
+        self.adjustSize()
+
+    def approve_request(self, req_id):
+        self.server_thread.admin_approve_peer_request(req_id)
+        self.refresh_ui()
+        if not self.server_thread.pending_peer_requests:
+            self.hide()
+
+    def reject_request(self, req_id):
+        self.server_thread.admin_reject_peer_request(req_id)
+        self.refresh_ui()
+        if not self.server_thread.pending_peer_requests:
+            self.hide()
+
+
 # --- MASTER DASHBOARD WINDOW WITH EMBEDDED LOGIN OVERLAY ---
 
 class MasterDashboardWindow(QMainWindow):
@@ -1167,6 +1570,7 @@ class MasterDashboardWindow(QMainWindow):
 
         self.cards = {} # client_id -> StreamCard
         self.active_modal = None
+        self.notif_popup = None
 
         # Stacked Widget to handle Login Overlay -> Main Dashboard Transition
         self.stacked_widget = QStackedWidget(self)
@@ -1194,6 +1598,7 @@ class MasterDashboardWindow(QMainWindow):
         self.server_thread.client_disconnected.connect(self.on_client_disconnected)
         self.server_thread.frame_received.connect(self.on_frame_received)
         self.server_thread.share_state_changed.connect(self.update_share_indicators)
+        self.server_thread.peer_requests_updated.connect(self.update_bell_indicator)
         self.server_thread.log_emitted.connect(print)
         self.server_thread.start()
 
@@ -1360,12 +1765,6 @@ class MasterDashboardWindow(QMainWindow):
         sb_layout.addWidget(btn_grid)
         self.sidebar_buttons.append(btn_grid)
 
-        btn_share_admin = QPushButton("  🖥️ Share Admin Screen", sidebar)
-        btn_share_admin.setObjectName("SidebarButton")
-        btn_share_admin.clicked.connect(lambda: (self._set_active_sidebar(btn_share_admin), self.open_share_admin_screen()))
-        sb_layout.addWidget(btn_share_admin)
-        self.sidebar_buttons.append(btn_share_admin)
-
         btn_rooms = QPushButton("  🏢 Group / Rooms", sidebar)
         btn_rooms.setObjectName("SidebarButton")
         btn_rooms.clicked.connect(lambda: (self._set_active_sidebar(btn_rooms), self.open_group_rooms()))
@@ -1404,10 +1803,12 @@ class MasterDashboardWindow(QMainWindow):
         ma_layout.setContentsMargins(0, 0, 0, 0)
         ma_layout.setSpacing(0)
 
-        # Top Header Bar
+        # Top Header Bar: [ Title ] -> stretch -> [ Share Admin Screen ] -> [ Connected: X ] -> [ Global Net ] -> [ Bell ]
         header = QFrame(main_area)
         header.setObjectName("HeaderFrame")
         h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(20, 10, 20, 10)
+        h_layout.setSpacing(12)
 
         title = QLabel("Live Employee Screen Monitor", header)
         title.setObjectName("HeaderTitle")
@@ -1415,13 +1816,58 @@ class MasterDashboardWindow(QMainWindow):
 
         h_layout.addStretch()
 
+        # 1. Share Admin Screen Button (Moved from sidebar to top-right header)
+        self.top_share_admin_btn = QPushButton("🖥️ Share Admin Screen", header)
+        self.top_share_admin_btn.setObjectName("TopShareAdminButton")
+        self.top_share_admin_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 243, 255, 0.15);
+                border: 1px solid rgba(0, 243, 255, 0.5);
+                border-radius: 8px;
+                color: #00F3FF;
+                padding: 6px 14px;
+                font-weight: 700;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(0, 243, 255, 0.35);
+                color: #FFFFFF;
+            }
+        """)
+        self.top_share_admin_btn.clicked.connect(self.open_share_admin_screen)
+        h_layout.addWidget(self.top_share_admin_btn)
+
+        # 2. Connected PCs Badge
         self.badge_connected = QLabel("Connected: 0 PCs", header)
         self.badge_connected.setObjectName("HeaderBadge")
         h_layout.addWidget(self.badge_connected)
 
+        # 3. Global Network Badge
         self.badge_fps = QLabel("Global Network: 0.0 MB/s", header)
         self.badge_fps.setObjectName("HeaderBadge")
         h_layout.addWidget(self.badge_fps)
+
+        # 4. Far-Right Notification Bell Button
+        self.bell_btn = QPushButton("🔔", header)
+        self.bell_btn.setObjectName("NotificationBellButton")
+        self.bell_btn.setFixedSize(38, 32)
+        self.bell_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bell_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(30, 41, 59, 0.9);
+                border: 1px solid #334155;
+                border-radius: 8px;
+                font-size: 15px;
+                color: #94A3B8;
+            }
+            QPushButton:hover {
+                border-color: #00F3FF;
+                color: #00F3FF;
+                background-color: rgba(51, 65, 85, 0.9);
+            }
+        """)
+        self.bell_btn.clicked.connect(self.toggle_notification_popup)
+        h_layout.addWidget(self.bell_btn)
 
         ma_layout.addWidget(header)
 
@@ -1438,6 +1884,61 @@ class MasterDashboardWindow(QMainWindow):
         ma_layout.addWidget(scroll_area)
 
         root_layout.addWidget(main_area)
+
+    def update_bell_indicator(self):
+        count = len(self.server_thread.pending_peer_requests)
+        if count > 0:
+            self.bell_btn.setText(f"🔔 {count}")
+            self.bell_btn.setFixedWidth(54)
+            self.bell_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(245, 158, 11, 0.25);
+                    border: 1px solid #F59E0B;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    font-weight: 800;
+                    color: #F59E0B;
+                }
+                QPushButton:hover {
+                    background-color: rgba(245, 158, 11, 0.45);
+                    color: #FFFFFF;
+                }
+            """)
+        else:
+            self.bell_btn.setText("🔔")
+            self.bell_btn.setFixedSize(38, 32)
+            self.bell_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(30, 41, 59, 0.9);
+                    border: 1px solid #334155;
+                    border-radius: 8px;
+                    font-size: 15px;
+                    color: #94A3B8;
+                }
+                QPushButton:hover {
+                    border-color: #00F3FF;
+                    color: #00F3FF;
+                    background-color: rgba(51, 65, 85, 0.9);
+                }
+            """)
+
+        if self.notif_popup and self.notif_popup.isVisible():
+            self.notif_popup.refresh_ui()
+
+    def toggle_notification_popup(self):
+        if self.notif_popup is None:
+            self.notif_popup = PeerRequestNotificationPopup(self.server_thread, self)
+
+        if self.notif_popup.isVisible():
+            self.notif_popup.hide()
+        else:
+            self.notif_popup.refresh_ui()
+            # Position right under bell button
+            bell_pos = self.bell_btn.mapToGlobal(self.bell_btn.rect().bottomRight())
+            popup_w = self.notif_popup.sizeHint().width()
+            self.notif_popup.move(bell_pos.x() - popup_w, bell_pos.y() + 6)
+            self.notif_popup.show()
+            self.notif_popup.raise_()
 
     def rearrange_grid(self):
         """Rearrange cards into a fluid responsive 3-column grid."""
@@ -1745,7 +2246,7 @@ def main():
     try:
         if sys.platform == "win32":
             import ctypes
-            myappid = "blackbox.overwatch.lanmonitor.2_105_0"
+            myappid = "blackbox.overwatch.lanmonitor.4_50_1"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         load_server_settings()
