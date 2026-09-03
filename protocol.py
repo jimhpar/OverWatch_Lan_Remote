@@ -25,6 +25,8 @@ class PacketType:
     PEER_REQUEST_DECLINED = "PEER_REQUEST_DECLINED"
     PEER_REQUEST_RESOLVED = "PEER_REQUEST_RESOLVED"
     CURSOR_UPDATE = "CURSOR_UPDATE"
+    CLIENT_STOP_SHARE_REQ = "CLIENT_STOP_SHARE_REQ"
+    SHARE_STATUS_UPDATE = "SHARE_STATUS_UPDATE"
 
 class Protocol:
     @staticmethod
@@ -217,6 +219,23 @@ class Protocol:
         if cursor_png_b64 is not None:
             pkt["cursor_png"] = cursor_png_b64
         return json.dumps(pkt)
+
+    @staticmethod
+    def create_client_stop_share_request(client_id):
+        return json.dumps({
+            "type": PacketType.CLIENT_STOP_SHARE_REQ,
+            "client_id": client_id,
+            "timestamp": time.time()
+        })
+
+    @staticmethod
+    def create_share_status_update(is_sharing, shared_with=None):
+        return json.dumps({
+            "type": PacketType.SHARE_STATUS_UPDATE,
+            "is_sharing": is_sharing,
+            "shared_with": shared_with or [],
+            "timestamp": time.time()
+        })
 
     @staticmethod
     def parse(raw_data):

@@ -354,6 +354,7 @@ class MasterWebSocketServer(QThread):
     log_emitted = pyqtSignal(str)
     share_state_changed = pyqtSignal()
     peer_requests_updated = pyqtSignal()
+    open_stream_requested = pyqtSignal(str)        # client_id to open single modal view on dashboard
 
     def __init__(self, host=Config.DEFAULT_HOST, port=Config.DEFAULT_PORT):
         super().__init__()
@@ -458,15 +459,20 @@ class MasterWebSocketServer(QThread):
                                 for tid in list(sess_data.get("targets", [])):
                                     self.send_to_client(tid, share_pkt)
 
+                elif pkt_type == PacketType.CLIENT_STOP_SHARE_REQ:
+                    src_id = data.get("client_id", client_id)
+                    self.stop_all_shares_for_source(src_id)
+                    self.notify_source_sharing_status(src_id)
+
                 elif pkt_type == PacketType.PEER_SHARE_REQ:
                     req_id = f"req_{int(time.time()*1000)}"
                     req_src = data.get("requester_id", client_id)
                     req_name = data.get("requester_name", self.client_info.get(client_id, {}).get("name", "User"))
                     target_id = data.get("target_id")
                     action_type = data.get("action_type", data.get("mode", "access_screen"))
-                    target_name = self.client_info.get(target_id, {}).get("name", target_id)
+                    target_name = "👑 Master Admin" if target_id == "ADMIN_PC" else self.client_info.get(target_id, {}).get("name", target_id)
 
-                    if target_id and target_id in self.active_clients:
+                    if target_id == "ADMIN_PC" or (target_id and target_id in self.active_clients):
                         self.pending_peer_requests[req_id] = {
                             "request_id": req_id,
                             "requester_id": req_src,
@@ -478,15 +484,16 @@ class MasterWebSocketServer(QThread):
                             "timestamp": time.time()
                         }
                         self.peer_requests_updated.emit()
-                        prompt_pkt = Protocol.create_peer_prompt_request(
-                            request_id=req_id,
-                            requester_id=req_src,
-                            requester_name=req_name,
-                            target_id=target_id,
-                            target_name=target_name,
-                            action_type=action_type
-                        )
-                        self.send_to_client(target_id, prompt_pkt)
+                        if target_id != "ADMIN_PC":
+                            prompt_pkt = Protocol.create_peer_prompt_request(
+                                request_id=req_id,
+                                requester_id=req_src,
+                                requester_name=req_name,
+                                target_id=target_id,
+                                target_name=target_name,
+                                action_type=action_type
+                            )
+                            self.send_to_client(target_id, prompt_pkt)
 
                 elif pkt_type == PacketType.PEER_PROMPT_RESP:
                     req_id = data.get("request_id")
@@ -557,15 +564,24 @@ class MasterWebSocketServer(QThread):
             self.broadcast_client_list()
 
     def broadcast_client_list(self):
-        """Dispatch list of all active online clients to all connected peers."""
-        c_list = []
+        """Dispatch list of all active online clients (including Admin PC) to all connected peers."""
+        c_list = [
+            {
+                "client_id": "ADMIN_PC",
+                "name": "👑 Master Admin",
+                "hostname": socket.gethostname(),
+                "ip": Config.get_local_ip(),
+                "is_admin": True
+            }
+        ]
         for cid, info in self.client_info.items():
             if cid in self.active_clients:
                 c_list.append({
                     "client_id": cid,
                     "name": info.get("name", "Employee PC"),
                     "hostname": info.get("hostname", "Host"),
-                    "ip": info.get("ip", "0.0.0.0")
+                    "ip": info.get("ip", "0.0.0.0"),
+                    "is_admin": False
                 })
         pkt = Protocol.create_client_list_update(c_list)
         self.broadcast(pkt)
@@ -581,6 +597,21 @@ class MasterWebSocketServer(QThread):
             for ws in list(self.active_clients.values()):
                 asyncio.run_coroutine_threadsafe(ws.send(packet_str), self.loop)
 
+    def notify_source_sharing_status(self, source_id):
+        if source_id == "ADMIN_PC" or source_id not in self.active_clients:
+            return
+        target_names = []
+        for sess in self.share_sessions.values():
+            if sess.get("source_id") == source_id:
+                for tid in sess.get("targets", []):
+                    if tid == "ADMIN_PC":
+                        target_names.append("👑 Master Admin")
+                    else:
+                        target_names.append(self.client_info.get(tid, {}).get("name", tid))
+        is_sharing = len(target_names) > 0
+        pkt = Protocol.create_share_status_update(is_sharing, target_names)
+        self.send_to_client(source_id, pkt)
+
     def start_share_session(self, source_id, source_name, target_ids, allow_remote=True):
         session_id = f"share_{source_id}_{int(time.time()*1000)}"
         self.share_sessions[session_id] = {
@@ -593,20 +624,25 @@ class MasterWebSocketServer(QThread):
         for tid in target_ids:
             self.send_to_client(tid, start_pkt)
         self.share_state_changed.emit()
+        self.notify_source_sharing_status(source_id)
         return session_id
 
     def stop_share_session(self, session_id):
         if session_id in self.share_sessions:
             sess_data = self.share_sessions.pop(session_id)
-            stop_pkt = Protocol.create_share_stop(session_id, sess_data.get("source_id"))
+            source_id = sess_data.get("source_id")
+            stop_pkt = Protocol.create_share_stop(session_id, source_id)
             for tid in sess_data.get("targets", []):
                 self.send_to_client(tid, stop_pkt)
             self.share_state_changed.emit()
+            if source_id:
+                self.notify_source_sharing_status(source_id)
 
     def stop_all_shares_for_source(self, source_id):
         for sess_id, sess in list(self.share_sessions.items()):
             if sess.get("source_id") == source_id:
                 self.stop_share_session(sess_id)
+        self.notify_source_sharing_status(source_id)
 
     def stop_all_shares_for_client(self, client_id):
         # Stop shares where this client is the source or one of the targets
@@ -619,6 +655,7 @@ class MasterWebSocketServer(QThread):
                     self.stop_share_session(sess_id)
                 else:
                     self.share_state_changed.emit()
+        self.notify_source_sharing_status(client_id)
 
     def get_active_share_for_source(self, source_id):
         for sess_id, sess in self.share_sessions.items():
@@ -646,25 +683,40 @@ class MasterWebSocketServer(QThread):
             requester_name = req.get("requester_name", "Requester PC")
             action_type = req.get("action_type", req.get("mode", "access_screen"))
 
-            # Close popup on target client
-            resolved_pkt = Protocol.create_peer_request_resolved(req_id)
-            self.send_to_client(target_id, resolved_pkt)
+            # Close popup on target client if target is not Admin
+            if target_id != "ADMIN_PC":
+                resolved_pkt = Protocol.create_peer_request_resolved(req_id)
+                self.send_to_client(target_id, resolved_pkt)
 
-            # Start share session based on action_type
-            if action_type == "share_my_screen":
-                self.start_share_session(
-                    source_id=requester_id,
-                    source_name=f"{requester_name}'s Screen",
-                    target_ids=[target_id],
-                    allow_remote=True
-                )
+            # Start share session based on action_type & whether target is ADMIN_PC
+            if target_id == "ADMIN_PC":
+                if action_type == "access_screen":
+                    # Employee requested access to Admin screen
+                    self.start_share_session(
+                        source_id="ADMIN_PC",
+                        source_name="👑 Master Admin Screen",
+                        target_ids=[requester_id],
+                        allow_remote=True
+                    )
+                else:
+                    # Employee sharing own screen to Admin
+                    self.open_stream_requested.emit(requester_id)
+                    self.notify_source_sharing_status(requester_id)
             else:
-                self.start_share_session(
-                    source_id=target_id,
-                    source_name=target_name,
-                    target_ids=[requester_id],
-                    allow_remote=True
-                )
+                if action_type == "share_my_screen":
+                    self.start_share_session(
+                        source_id=requester_id,
+                        source_name=f"{requester_name}'s Screen",
+                        target_ids=[target_id],
+                        allow_remote=True
+                    )
+                else:
+                    self.start_share_session(
+                        source_id=target_id,
+                        source_name=target_name,
+                        target_ids=[requester_id],
+                        allow_remote=True
+                    )
 
     def admin_reject_peer_request(self, req_id):
         if req_id in self.pending_peer_requests:
@@ -1625,6 +1677,7 @@ class MasterDashboardWindow(QMainWindow):
         self.server_thread.frame_received.connect(self.on_frame_received)
         self.server_thread.share_state_changed.connect(self.update_share_indicators)
         self.server_thread.peer_requests_updated.connect(self.update_bell_indicator)
+        self.server_thread.open_stream_requested.connect(self.open_single_view_modal)
         self.server_thread.log_emitted.connect(print)
         self.server_thread.start()
 
@@ -2272,7 +2325,7 @@ def main():
     try:
         if sys.platform == "win32":
             import ctypes
-            myappid = "blackbox.overwatch.lanmonitor.4_50_2"
+            myappid = "blackbox.overwatch.lanmonitor.4_6_1"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         load_server_settings()

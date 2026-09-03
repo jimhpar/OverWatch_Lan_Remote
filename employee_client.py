@@ -320,6 +320,7 @@ class ClientWorker(QObject):
     peer_prompt_received = pyqtSignal(str, str, str, str, str) # req_id, req_id_str, req_name, target_id, mode
     peer_request_declined = pyqtSignal(str, str) # target_name, reason
     peer_request_resolved = pyqtSignal(str) # req_id
+    share_status_changed = pyqtSignal(bool, list) # is_sharing, shared_with_names
 
     def __init__(self, server_ip, server_port, client_name, passcode):
         super().__init__()
@@ -493,9 +494,19 @@ class ClientWorker(QObject):
                 session_id = pkt.get("session_id")
                 self.share_stopped.emit(session_id)
 
+            elif pkt_type == PacketType.SHARE_STATUS_UPDATE:
+                is_sharing = pkt.get("is_sharing", False)
+                shared_with = pkt.get("shared_with", [])
+                self.share_status_changed.emit(is_sharing, shared_with)
+
     def send_share_input(self, session_id, source_id, event_type, params):
         if self.loop and self.ws:
             pkt = Protocol.create_share_input(session_id, source_id, event_type, params)
+            asyncio.run_coroutine_threadsafe(self.ws.send(pkt), self.loop)
+
+    def send_stop_sharing(self):
+        if self.loop and self.ws:
+            pkt = Protocol.create_client_stop_share_request(f"{self.hostname}_{self.local_ip}")
             asyncio.run_coroutine_threadsafe(self.ws.send(pkt), self.loop)
 
     def send_peer_share_request(self, target_id, action_type="access_screen"):
@@ -1079,8 +1090,8 @@ def create_tray_icon_pixmap(color_hex="#00F3FF"):
 class ClientMessengerPanel(QWidget):
     """
     Modern messenger-sized floating panel for Employee Client.
-    Displays profile card, server connection status, and connected colleagues
-    with dedicated 'Access Screen' and 'Share My Screen' actions for each user.
+    Displays profile card, active screen sharing status with stop button, 
+    Master Admin card, and connected colleagues with 'Access Screen' and 'Share My Screen' actions.
     """
     def __init__(self, client_app):
         super().__init__()
@@ -1091,7 +1102,7 @@ class ClientMessengerPanel(QWidget):
             Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(380, 520)
+        self.resize(380, 540)
         self.init_ui()
 
     def init_ui(self):
@@ -1136,7 +1147,7 @@ class ClientMessengerPanel(QWidget):
 
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(16, 16, 16, 14)
-        card_layout.setSpacing(12)
+        card_layout.setSpacing(10)
 
         # 1. Top Header: App Branding + Close button
         header_row = QHBoxLayout()
@@ -1224,19 +1235,58 @@ class ClientMessengerPanel(QWidget):
         profile_layout.addWidget(edit_btn)
         card_layout.addWidget(profile_frame)
 
-        # 3. Connected Colleagues Section Title
+        # 3. Active Screen Sharing Banner (Hidden when not sharing)
+        self.share_banner = QFrame(self.card)
+        self.share_banner.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(239, 68, 68, 0.25), stop:1 rgba(185, 28, 28, 0.35));
+                border: 1.5px solid #EF4444;
+                border-radius: 10px;
+            }
+        """)
+        share_banner_layout = QHBoxLayout(self.share_banner)
+        share_banner_layout.setContentsMargins(12, 8, 12, 8)
+        share_banner_layout.setSpacing(10)
+
+        self.share_banner_lbl = QLabel("🔴 Live Sharing Screen", self.share_banner)
+        self.share_banner_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #FCA5A5; border: none; background: transparent;")
+        self.share_banner_lbl.setWordWrap(True)
+        share_banner_layout.addWidget(self.share_banner_lbl, 1)
+
+        self.stop_share_btn = QPushButton("⏹️ Stop Sharing", self.share_banner)
+        self.stop_share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_share_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #EF4444;
+                border: 1px solid #F87171;
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background-color: #DC2626;
+            }
+        """)
+        self.stop_share_btn.clicked.connect(self.client_app.stop_my_sharing)
+        share_banner_layout.addWidget(self.stop_share_btn)
+        self.share_banner.hide()
+        card_layout.addWidget(self.share_banner)
+
+        # 4. Connected Colleagues Section Title
         section_box = QVBoxLayout()
         section_box.setSpacing(2)
-        self.peers_title = QLabel("👥 Connected Colleagues (0 Online)", self.card)
+        self.peers_title = QLabel("👥 Available Screen Targets (0 Online)", self.card)
         self.peers_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #00F3FF; border: none; background: transparent;")
         section_box.addWidget(self.peers_title)
 
-        peers_sub = QLabel("Select an action below to access or share live screens:", self.card)
+        peers_sub = QLabel("Access a colleague/admin screen, or push your live display:", self.card)
         peers_sub.setStyleSheet("font-size: 11px; color: #94A3B8; border: none; background: transparent;")
         section_box.addWidget(peers_sub)
         card_layout.addLayout(section_box)
 
-        # 4. Scroll Area for Users
+        # 5. Scroll Area for Users
         scroll = QScrollArea(self.card)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1249,7 +1299,7 @@ class ClientMessengerPanel(QWidget):
         scroll.setWidget(self.scroll_content)
         card_layout.addWidget(scroll, 1)
 
-        # 5. Bottom Action Bar (Master IP & Exit Client)
+        # 6. Bottom Action Bar (Master IP & Exit Client)
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(10)
 
@@ -1308,6 +1358,14 @@ class ClientMessengerPanel(QWidget):
             self.status_lbl.setText(f"🔴 {status_msg}")
             self.status_lbl.setStyleSheet("font-size: 11px; color: #EF4444; border: none; background: transparent;")
 
+    def update_sharing_banner(self, is_sharing, shared_with):
+        if is_sharing:
+            names = ", ".join(shared_with) if shared_with else "Active Session"
+            self.share_banner_lbl.setText(f"🔴 Broadcasting live screen to:\n<b>{names}</b>")
+            self.share_banner.show()
+        else:
+            self.share_banner.hide()
+
     def refresh_users_list(self, peers):
         while self.users_vbox.count():
             item = self.users_vbox.takeAt(0)
@@ -1316,19 +1374,25 @@ class ClientMessengerPanel(QWidget):
                 w.deleteLater()
 
         my_id = f"{socket.gethostname()}_{getattr(self.client_app, 'local_ip', Config.get_local_ip())}"
-        filtered = []
+        admin_peers = []
+        colleague_peers = []
         seen = set()
+
         for p in peers:
             cid = p.get("client_id", "")
             if cid == my_id or p.get("name") == self.client_app.client_name:
                 continue
             if cid not in seen:
                 seen.add(cid)
-                filtered.append(p)
+                if p.get("is_admin") or cid == "ADMIN_PC":
+                    admin_peers.append(p)
+                else:
+                    colleague_peers.append(p)
 
-        self.peers_title.setText(f"👥 Connected Colleagues ({len(filtered)} Online)")
+        total_online = len(admin_peers) + len(colleague_peers)
+        self.peers_title.setText(f"👥 Available Screen Targets ({total_online} Online)")
 
-        if not filtered:
+        if not admin_peers and not colleague_peers:
             empty_card = QFrame()
             empty_card.setStyleSheet("""
                 QFrame {
@@ -1339,7 +1403,7 @@ class ClientMessengerPanel(QWidget):
                 }
             """)
             empty_layout = QVBoxLayout(empty_card)
-            lbl = QLabel("📡 No other colleagues currently online on LAN.")
+            lbl = QLabel("📡 No other users currently online on LAN.")
             lbl.setStyleSheet("color: #64748B; font-size: 12px; font-style: italic; border: none; background: transparent;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty_layout.addWidget(lbl)
@@ -1347,7 +1411,91 @@ class ClientMessengerPanel(QWidget):
             self.users_vbox.addStretch()
             return
 
-        for p in filtered:
+        # 1. Render Admin Card (If online)
+        for adm in admin_peers:
+            adm_id = adm.get("client_id", "ADMIN_PC")
+            adm_name = adm.get("name", "👑 Master Admin")
+            adm_ip = adm.get("ip", self.client_app.server_ip)
+
+            adm_card = QFrame()
+            adm_card.setStyleSheet("""
+                QFrame {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(30, 41, 59, 0.95), stop:1 rgba(49, 46, 129, 0.6));
+                    border: 1.5px solid #F59E0B;
+                    border-radius: 10px;
+                }
+            """)
+            adm_layout = QVBoxLayout(adm_card)
+            adm_layout.setContentsMargins(12, 10, 12, 10)
+            adm_layout.setSpacing(8)
+
+            top_row = QHBoxLayout()
+            name_lbl = QLabel(f"{adm_name}")
+            name_lbl.setStyleSheet("font-size: 13px; font-weight: 800; color: #F59E0B; border: none; background: transparent;")
+            top_row.addWidget(name_lbl)
+            top_row.addStretch()
+
+            ip_badge = QLabel(f"Admin • {adm_ip}")
+            ip_badge.setStyleSheet("""
+                font-size: 11px;
+                font-weight: bold;
+                color: #FCD34D;
+                background-color: rgba(245, 158, 11, 0.18);
+                border: 1px solid rgba(245, 158, 11, 0.5);
+                border-radius: 5px;
+                padding: 2px 6px;
+            """)
+            top_row.addWidget(ip_badge)
+            adm_layout.addLayout(top_row)
+
+            btn_row = QHBoxLayout()
+            btn_row.setSpacing(8)
+
+            access_btn = QPushButton("👁️ Access Admin Screen")
+            access_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            access_btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(0, 243, 255, 0.15);
+                    border: 1px solid #00F3FF;
+                    border-radius: 6px;
+                    color: #00F3FF;
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 8px 10px;
+                }
+                QPushButton:hover {
+                    background: rgba(0, 243, 255, 0.35);
+                    color: #FFFFFF;
+                }
+            """)
+            access_btn.clicked.connect(lambda checked, tid=adm_id, tname="Master Admin": (self.client_app.request_peer_share(tid, tname, "access_screen"), self.hide()))
+            btn_row.addWidget(access_btn)
+
+            share_btn = QPushButton("↗️ Share My Screen")
+            share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            share_btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(16, 185, 129, 0.15);
+                    border: 1px solid #10B981;
+                    border-radius: 6px;
+                    color: #10B981;
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 8px 10px;
+                }
+                QPushButton:hover {
+                    background: rgba(16, 185, 129, 0.35);
+                    color: #FFFFFF;
+                }
+            """)
+            share_btn.clicked.connect(lambda checked, tid=adm_id, tname="Master Admin": (self.client_app.request_peer_share(tid, tname, "share_my_screen"), self.hide()))
+            btn_row.addWidget(share_btn)
+
+            adm_layout.addLayout(btn_row)
+            self.users_vbox.addWidget(adm_card)
+
+        # 2. Render Colleagues
+        for p in colleague_peers:
             p_id = p.get("client_id")
             p_name = p.get("name", "User PC")
             p_ip = p.get("ip", "")
@@ -1472,6 +1620,8 @@ class EmployeeClientTrayApp(QWidget):
         self.active_shared_viewers = {}  # session_id -> SharedStreamViewer
         self.connected_users = []
         self.current_prompt_dialog = None
+        self.is_currently_sharing = False
+        self.shared_with_targets = []
 
         self.enable_auto_startup()
         self.load_settings()
@@ -1588,6 +1738,30 @@ class EmployeeClientTrayApp(QWidget):
             4000
         )
 
+    def stop_my_sharing(self):
+        if self.worker:
+            self.worker.send_stop_sharing()
+        self.on_share_status_changed(False, [])
+        self.tray.showMessage(
+            "Screen Sharing Stopped",
+            "You have stopped sharing your live screen.",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000
+        )
+
+    def on_share_status_changed(self, is_sharing, shared_with):
+        self.is_currently_sharing = is_sharing
+        self.shared_with_targets = shared_with
+        self.panel.update_sharing_banner(is_sharing, shared_with)
+        if is_sharing:
+            names = ", ".join(shared_with) if shared_with else "Colleagues"
+            self.tray.showMessage(
+                "Screen Sharing Active",
+                f"You are actively sharing your display with {names}.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000
+            )
+
     def on_client_list_updated(self, clients):
         self.connected_users = clients
         self.panel.refresh_users_list(clients)
@@ -1641,6 +1815,7 @@ class EmployeeClientTrayApp(QWidget):
         self.worker.share_started.connect(self.on_share_started)
         self.worker.share_frame_received.connect(self.on_share_frame_received)
         self.worker.share_stopped.connect(self.on_share_stopped)
+        self.worker.share_status_changed.connect(self.on_share_status_changed)
         self.worker.client_list_updated.connect(self.on_client_list_updated)
         self.worker.peer_prompt_received.connect(self.on_peer_prompt_received)
         self.worker.peer_request_declined.connect(self.on_peer_request_declined)
@@ -1776,7 +1951,7 @@ class EmployeeClientTrayApp(QWidget):
 def main():
     if sys.platform == "win32":
         import ctypes
-        myappid = "blackbox.overwatch.lanmonitor.4_50_2"
+        myappid = "blackbox.overwatch.lanmonitor.4_6_1"
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)

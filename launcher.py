@@ -223,7 +223,7 @@ def main():
     try:
         if sys.platform == "win32":
             import ctypes
-            myappid = "blackbox.overwatch.lanmonitor.4_50_2"
+            myappid = "blackbox.overwatch.lanmonitor.4_6_1"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         # Check for --switch-role flag to force role selection

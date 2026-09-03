@@ -107,8 +107,8 @@ executables = [
 
 setup(
     name="Overwatch",
-    version="4.50.2",
-    description="Overwatch LAN Live Screen Monitoring System v4.50.2",
+    version="4.6.1",
+    description="Overwatch LAN Live Screen Monitoring System v4.6.1",
     author="Blackbox THC",
     author_email="",
     options={
