@@ -150,18 +150,19 @@ class Protocol:
         })
 
     @staticmethod
-    def create_peer_share_request(requester_id, requester_name, target_id, mode="view"):
+    def create_peer_share_request(requester_id, requester_name, target_id, action_type="access_screen"):
         return json.dumps({
             "type": PacketType.PEER_SHARE_REQ,
             "requester_id": requester_id,
             "requester_name": requester_name,
             "target_id": target_id,
-            "mode": mode,
+            "action_type": action_type,
+            "mode": action_type,
             "timestamp": time.time()
         })
 
     @staticmethod
-    def create_peer_prompt_request(request_id, requester_id, requester_name, target_id, target_name, mode="view"):
+    def create_peer_prompt_request(request_id, requester_id, requester_name, target_id, target_name, action_type="access_screen"):
         return json.dumps({
             "type": PacketType.PEER_PROMPT_REQ,
             "request_id": request_id,
@@ -169,19 +170,21 @@ class Protocol:
             "requester_name": requester_name,
             "target_id": target_id,
             "target_name": target_name,
-            "mode": mode,
+            "action_type": action_type,
+            "mode": action_type,
             "timestamp": time.time()
         })
 
     @staticmethod
-    def create_peer_prompt_response(request_id, requester_id, target_id, accepted, mode="view"):
+    def create_peer_prompt_response(request_id, requester_id, target_id, accepted, action_type="access_screen"):
         return json.dumps({
             "type": PacketType.PEER_PROMPT_RESP,
             "request_id": request_id,
             "requester_id": requester_id,
             "target_id": target_id,
             "accepted": accepted,
-            "mode": mode,
+            "action_type": action_type,
+            "mode": action_type,
             "timestamp": time.time()
         })
 

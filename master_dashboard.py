@@ -463,7 +463,7 @@ class MasterWebSocketServer(QThread):
                     req_src = data.get("requester_id", client_id)
                     req_name = data.get("requester_name", self.client_info.get(client_id, {}).get("name", "User"))
                     target_id = data.get("target_id")
-                    mode = data.get("mode", "view")
+                    action_type = data.get("action_type", data.get("mode", "access_screen"))
                     target_name = self.client_info.get(target_id, {}).get("name", target_id)
 
                     if target_id and target_id in self.active_clients:
@@ -473,7 +473,8 @@ class MasterWebSocketServer(QThread):
                             "requester_name": req_name,
                             "target_id": target_id,
                             "target_name": target_name,
-                            "mode": mode,
+                            "action_type": action_type,
+                            "mode": action_type,
                             "timestamp": time.time()
                         }
                         self.peer_requests_updated.emit()
@@ -483,7 +484,7 @@ class MasterWebSocketServer(QThread):
                             requester_name=req_name,
                             target_id=target_id,
                             target_name=target_name,
-                            mode=mode
+                            action_type=action_type
                         )
                         self.send_to_client(target_id, prompt_pkt)
 
@@ -492,20 +493,29 @@ class MasterWebSocketServer(QThread):
                     req_src = data.get("requester_id")
                     target_id = data.get("target_id", client_id)
                     accepted = data.get("accepted", False)
-                    mode = data.get("mode", "view")
+                    action_type = data.get("action_type", data.get("mode", "access_screen"))
                     target_name = self.client_info.get(target_id, {}).get("name", "Target PC")
+                    req_name = self.client_info.get(req_src, {}).get("name", "Requester PC")
 
                     if req_id in self.pending_peer_requests:
                         del self.pending_peer_requests[req_id]
                         self.peer_requests_updated.emit()
 
                     if accepted:
-                        self.start_share_session(
-                            source_id=target_id,
-                            source_name=target_name,
-                            target_ids=[req_src],
-                            allow_remote=(mode == "control")
-                        )
+                        if action_type == "share_my_screen":
+                            self.start_share_session(
+                                source_id=req_src,
+                                source_name=f"{req_name}'s Screen",
+                                target_ids=[target_id],
+                                allow_remote=True
+                            )
+                        else:
+                            self.start_share_session(
+                                source_id=target_id,
+                                source_name=target_name,
+                                target_ids=[req_src],
+                                allow_remote=True
+                            )
                     else:
                         dec_pkt = Protocol.create_peer_request_declined(target_name, "User declined the request.")
                         self.send_to_client(req_src, dec_pkt)
@@ -633,19 +643,28 @@ class MasterWebSocketServer(QThread):
             target_id = req.get("target_id")
             requester_id = req.get("requester_id")
             target_name = req.get("target_name")
-            mode = req.get("mode", "view")
+            requester_name = req.get("requester_name", "Requester PC")
+            action_type = req.get("action_type", req.get("mode", "access_screen"))
 
             # Close popup on target client
             resolved_pkt = Protocol.create_peer_request_resolved(req_id)
             self.send_to_client(target_id, resolved_pkt)
 
-            # Start share session
-            self.start_share_session(
-                source_id=target_id,
-                source_name=target_name,
-                target_ids=[requester_id],
-                allow_remote=(mode == "control")
-            )
+            # Start share session based on action_type
+            if action_type == "share_my_screen":
+                self.start_share_session(
+                    source_id=requester_id,
+                    source_name=f"{requester_name}'s Screen",
+                    target_ids=[target_id],
+                    allow_remote=True
+                )
+            else:
+                self.start_share_session(
+                    source_id=target_id,
+                    source_name=target_name,
+                    target_ids=[requester_id],
+                    allow_remote=True
+                )
 
     def admin_reject_peer_request(self, req_id):
         if req_id in self.pending_peer_requests:
@@ -1486,10 +1505,17 @@ class PeerRequestNotificationPopup(QFrame):
                 card_vbox.setContentsMargins(10, 10, 10, 10)
                 card_vbox.setSpacing(8)
 
-                mode_str = "🎮 Remote Control" if req.get("mode") == "control" else "👁️ Screen View"
+                act_type = req.get("action_type", req.get("mode", "access_screen"))
+                if act_type == "share_my_screen":
+                    act_str = "↗️ Share My Screen"
+                    act_color = "#10B981"
+                else:
+                    act_str = "👁️ Access Screen"
+                    act_color = "#00F3FF"
+
                 info_lbl = QLabel(
                     f"<b>{req.get('requester_name')}</b> ➔ <b>{req.get('target_name')}</b><br>"
-                    f"<span style='color: #00F3FF; font-size: 11px;'>Requesting {mode_str}</span>",
+                    f"<span style='color: {act_color}; font-size: 11px;'>Requesting {act_str}</span>",
                     req_card
                 )
                 info_lbl.setWordWrap(True)
@@ -2246,7 +2272,7 @@ def main():
     try:
         if sys.platform == "win32":
             import ctypes
-            myappid = "blackbox.overwatch.lanmonitor.4_50_1"
+            myappid = "blackbox.overwatch.lanmonitor.4_50_2"
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         load_server_settings()

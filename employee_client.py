@@ -129,9 +129,10 @@ else:
 from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QMessageBox,
                              QInputDialog, QWidget, QDialog, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QFrame,
-                             QComboBox, QFileDialog, QSizePolicy, QProgressBar)
+                             QComboBox, QFileDialog, QSizePolicy, QProgressBar,
+                             QScrollArea, QLineEdit)
 from PyQt6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QCursor
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QEvent, QSize
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt, QEvent, QSize, QPoint
 
 from config import Config
 from protocol import Protocol, PacketType
@@ -497,24 +498,24 @@ class ClientWorker(QObject):
             pkt = Protocol.create_share_input(session_id, source_id, event_type, params)
             asyncio.run_coroutine_threadsafe(self.ws.send(pkt), self.loop)
 
-    def send_peer_share_request(self, target_id, mode="view"):
+    def send_peer_share_request(self, target_id, action_type="access_screen"):
         if self.loop and self.ws:
             pkt = Protocol.create_peer_share_request(
                 requester_id=f"{self.hostname}_{self.local_ip}",
                 requester_name=self.client_name,
                 target_id=target_id,
-                mode=mode
+                action_type=action_type
             )
             asyncio.run_coroutine_threadsafe(self.ws.send(pkt), self.loop)
 
-    def send_peer_prompt_response(self, request_id, requester_id, target_id, accepted, mode="view"):
+    def send_peer_prompt_response(self, request_id, requester_id, target_id, accepted, action_type="access_screen"):
         if self.loop and self.ws:
             pkt = Protocol.create_peer_prompt_response(
                 request_id=request_id,
                 requester_id=requester_id,
                 target_id=target_id,
                 accepted=accepted,
-                mode=mode
+                action_type=action_type
             )
             asyncio.run_coroutine_threadsafe(self.ws.send(pkt), self.loop)
 
@@ -879,21 +880,21 @@ class SharedStreamViewer(QDialog):
 
 
 class RequestPromptDialog(QDialog):
-    """Modern Glassmorphic confirmation dialog when another user requests screen access."""
-    accepted_signal = pyqtSignal(str, str, str, str) # req_id, req_id_str, target_id, mode
+    """Modern Glassmorphic confirmation dialog when another user requests screen access or sharing."""
+    accepted_signal = pyqtSignal(str, str, str, str) # req_id, requester_id, target_id, action_type
     declined_signal = pyqtSignal(str, str, str, str)
 
-    def __init__(self, request_id, requester_id, requester_name, target_id, mode="view", parent=None):
+    def __init__(self, request_id, requester_id, requester_name, target_id, action_type="access_screen", parent=None):
         super().__init__(parent)
         self.request_id = request_id
         self.requester_id = requester_id
         self.requester_name = requester_name
         self.target_id = target_id
-        self.mode = mode
+        self.action_type = action_type
         self.countdown = 30
 
-        self.setWindowTitle("Overwatch - Screen Access Request")
-        self.setFixedSize(460, 270)
+        self.setWindowTitle("Overwatch - Screen Collaboration Request")
+        self.setFixedSize(480, 280)
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
@@ -910,13 +911,13 @@ class RequestPromptDialog(QDialog):
         card = QFrame(self)
         card.setStyleSheet("""
             QFrame {
-                background-color: rgba(15, 23, 42, 0.96);
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(15, 23, 42, 0.98), stop:1 rgba(30, 41, 59, 0.98));
                 border: 2px solid #00F3FF;
                 border-radius: 14px;
             }
             QLabel {
                 color: #F8FAFC;
-                font-family: 'Segoe UI', 'Inter', sans-serif;
+                font-family: 'Segoe UI', 'Inter', -apple-system, sans-serif;
             }
         """)
         card_layout = QVBoxLayout(card)
@@ -925,8 +926,13 @@ class RequestPromptDialog(QDialog):
 
         # Title row
         title_box = QHBoxLayout()
-        icon_str = "🎮" if self.mode == "control" else "👁️"
-        action_title = "Remote Control Request" if self.mode == "control" else "Screen View Request"
+        if self.action_type == "share_my_screen":
+            icon_str = "↗️"
+            action_title = "Incoming Screen Share"
+        else:
+            icon_str = "👁️"
+            action_title = "Screen Access Request"
+
         title_lbl = QLabel(f"{icon_str} {action_title}", card)
         title_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #00F3FF; border: none;")
         title_box.addWidget(title_lbl)
@@ -938,12 +944,21 @@ class RequestPromptDialog(QDialog):
         card_layout.addLayout(title_box)
 
         # Body message
-        perm_text = "<b>REMOTELY CONTROL</b> your workstation" if self.mode == "control" else "<b>VIEW</b> your live display"
-        body_lbl = QLabel(
-            f"<b>{self.requester_name}</b> is requesting permission to {perm_text}.<br><br>"
-            "Do you want to grant access?",
-            card
-        )
+        if self.action_type == "share_my_screen":
+            body_lbl = QLabel(
+                f"<b>{self.requester_name}</b> wants to <b>SHARE THEIR LIVE SCREEN</b> with you.<br><br>"
+                "Do you want to accept and view their display?",
+                card
+            )
+            accept_text = "✅ Accept & View Screen"
+        else:
+            body_lbl = QLabel(
+                f"<b>{self.requester_name}</b> is requesting permission to <b>ACCESS & VIEW</b> your workstation.<br><br>"
+                "Do you want to grant access?",
+                card
+            )
+            accept_text = "✅ Grant Access"
+
         body_lbl.setWordWrap(True)
         body_lbl.setStyleSheet("color: #E2E8F0; font-size: 13px; line-height: 1.4; border: none;")
         card_layout.addWidget(body_lbl)
@@ -955,6 +970,7 @@ class RequestPromptDialog(QDialog):
         btn_box.setSpacing(14)
 
         decline_btn = QPushButton("❌ Decline", card)
+        decline_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         decline_btn.setStyleSheet("""
             QPushButton {
                 background-color: rgba(239, 68, 68, 0.2);
@@ -962,7 +978,7 @@ class RequestPromptDialog(QDialog):
                 border-radius: 8px;
                 color: #EF4444;
                 font-weight: 700;
-                padding: 8px 18px;
+                padding: 10px 18px;
                 font-size: 13px;
             }
             QPushButton:hover {
@@ -973,7 +989,8 @@ class RequestPromptDialog(QDialog):
         decline_btn.clicked.connect(self.on_decline)
         btn_box.addWidget(decline_btn)
 
-        accept_btn = QPushButton("✅ Accept & Share", card)
+        accept_btn = QPushButton(accept_text, card)
+        accept_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         accept_btn.setStyleSheet("""
             QPushButton {
                 background-color: rgba(16, 185, 129, 0.25);
@@ -981,7 +998,7 @@ class RequestPromptDialog(QDialog):
                 border-radius: 8px;
                 color: #10B981;
                 font-weight: 700;
-                padding: 8px 18px;
+                padding: 10px 18px;
                 font-size: 13px;
             }
             QPushButton:hover {
@@ -1005,12 +1022,12 @@ class RequestPromptDialog(QDialog):
 
     def on_accept(self):
         self.timer.stop()
-        self.accepted_signal.emit(self.request_id, self.requester_id, self.target_id, self.mode)
+        self.accepted_signal.emit(self.request_id, self.requester_id, self.target_id, self.action_type)
         self.accept()
 
     def on_decline(self):
         self.timer.stop()
-        self.declined_signal.emit(self.request_id, self.requester_id, self.target_id, self.mode)
+        self.declined_signal.emit(self.request_id, self.requester_id, self.target_id, self.action_type)
         self.reject()
 
 
@@ -1059,6 +1076,386 @@ def create_tray_icon_pixmap(color_hex="#00F3FF"):
     return pixmap
 
 
+class ClientMessengerPanel(QWidget):
+    """
+    Modern messenger-sized floating panel for Employee Client.
+    Displays profile card, server connection status, and connected colleagues
+    with dedicated 'Access Screen' and 'Share My Screen' actions for each user.
+    """
+    def __init__(self, client_app):
+        super().__init__()
+        self.client_app = client_app
+        self.setWindowFlags(
+            Qt.WindowType.Tool | 
+            Qt.WindowType.FramelessWindowHint | 
+            Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(380, 520)
+        self.init_ui()
+
+    def init_ui(self):
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+
+        # Outer card container with glass styling
+        self.card = QFrame(self)
+        self.card.setObjectName("MessengerCard")
+        self.card.setStyleSheet("""
+            QFrame#MessengerCard {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(15, 23, 42, 0.98), stop:1 rgba(30, 41, 59, 0.98));
+                border: 1.5px solid rgba(0, 243, 255, 0.45);
+                border-radius: 16px;
+            }
+            QLabel {
+                color: #F8FAFC;
+                font-family: 'Segoe UI', 'Inter', -apple-system, sans-serif;
+            }
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: rgba(15, 23, 42, 0.5);
+                width: 6px;
+                border-radius: 3px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(0, 243, 255, 0.4);
+                border-radius: 3px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #00F3FF;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(16, 16, 16, 14)
+        card_layout.setSpacing(12)
+
+        # 1. Top Header: App Branding + Close button
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+        
+        brand_icon = QLabel("🛡️", self.card)
+        brand_icon.setStyleSheet("font-size: 18px; border: none; background: transparent;")
+        header_row.addWidget(brand_icon)
+
+        brand_title = QLabel("Overwatch Workstation", self.card)
+        brand_title.setStyleSheet("font-size: 15px; font-weight: 800; color: #00F3FF; border: none; background: transparent;")
+        header_row.addWidget(brand_title)
+        header_row.addStretch()
+
+        close_btn = QPushButton("✕", self.card)
+        close_btn.setFixedSize(26, 26)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 13px;
+                color: #94A3B8;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: rgba(239, 68, 68, 0.35);
+                border-color: #EF4444;
+                color: #FFFFFF;
+            }
+        """)
+        close_btn.clicked.connect(self.hide)
+        header_row.addWidget(close_btn)
+        card_layout.addLayout(header_row)
+
+        # 2. User Profile Box (Avatar, Name + Edit Button)
+        profile_frame = QFrame(self.card)
+        profile_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(30, 41, 59, 0.6);
+                border: 1px solid rgba(51, 65, 85, 0.8);
+                border-radius: 12px;
+            }
+        """)
+        profile_layout = QHBoxLayout(profile_frame)
+        profile_layout.setContentsMargins(12, 10, 12, 10)
+        profile_layout.setSpacing(10)
+
+        avatar_lbl = QLabel("👤", profile_frame)
+        avatar_lbl.setStyleSheet("font-size: 26px; border: none; background: transparent;")
+        profile_layout.addWidget(avatar_lbl)
+
+        info_vbox = QVBoxLayout()
+        info_vbox.setSpacing(2)
+
+        self.name_lbl = QLabel(f"Employee: {self.client_app.client_name}", profile_frame)
+        self.name_lbl.setStyleSheet("font-size: 14px; font-weight: 700; color: #FFFFFF; border: none; background: transparent;")
+        info_vbox.addWidget(self.name_lbl)
+
+        self.status_lbl = QLabel("🟢 Connected to Master", profile_frame)
+        self.status_lbl.setStyleSheet("font-size: 11px; color: #10B981; border: none; background: transparent;")
+        info_vbox.addWidget(self.status_lbl)
+        profile_layout.addLayout(info_vbox)
+        profile_layout.addStretch()
+
+        edit_btn = QPushButton("✏️ Rename", profile_frame)
+        edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(0, 243, 255, 0.12);
+                border: 1px solid rgba(0, 243, 255, 0.4);
+                border-radius: 6px;
+                color: #00F3FF;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 5px 10px;
+            }
+            QPushButton:hover {
+                background: rgba(0, 243, 255, 0.25);
+                color: #FFFFFF;
+            }
+        """)
+        edit_btn.clicked.connect(self.client_app.prompt_employee_name)
+        profile_layout.addWidget(edit_btn)
+        card_layout.addWidget(profile_frame)
+
+        # 3. Connected Colleagues Section Title
+        section_box = QVBoxLayout()
+        section_box.setSpacing(2)
+        self.peers_title = QLabel("👥 Connected Colleagues (0 Online)", self.card)
+        self.peers_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #00F3FF; border: none; background: transparent;")
+        section_box.addWidget(self.peers_title)
+
+        peers_sub = QLabel("Select an action below to access or share live screens:", self.card)
+        peers_sub.setStyleSheet("font-size: 11px; color: #94A3B8; border: none; background: transparent;")
+        section_box.addWidget(peers_sub)
+        card_layout.addLayout(section_box)
+
+        # 4. Scroll Area for Users
+        scroll = QScrollArea(self.card)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        self.scroll_content = QWidget()
+        self.scroll_content.setStyleSheet("background: transparent;")
+        self.users_vbox = QVBoxLayout(self.scroll_content)
+        self.users_vbox.setContentsMargins(2, 4, 2, 4)
+        self.users_vbox.setSpacing(10)
+        scroll.setWidget(self.scroll_content)
+        card_layout.addWidget(scroll, 1)
+
+        # 5. Bottom Action Bar (Master IP & Exit Client)
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(10)
+
+        ip_btn = QPushButton("⚙️ Server IP", self.card)
+        ip_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ip_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(51, 65, 85, 0.5);
+                border: 1px solid rgba(71, 85, 105, 0.8);
+                border-radius: 8px;
+                color: #CBD5E1;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background: rgba(71, 85, 105, 0.8);
+                color: #FFFFFF;
+            }
+        """)
+        ip_btn.clicked.connect(self.client_app.prompt_server_ip)
+        bottom_row.addWidget(ip_btn)
+
+        exit_btn = QPushButton("🚪 Exit Client", self.card)
+        exit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        exit_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(239, 68, 68, 0.15);
+                border: 1px solid rgba(239, 68, 68, 0.4);
+                border-radius: 8px;
+                color: #EF4444;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background: rgba(239, 68, 68, 0.35);
+                color: #FFFFFF;
+            }
+        """)
+        exit_btn.clicked.connect(self.client_app.quit_app)
+        bottom_row.addWidget(exit_btn)
+        card_layout.addLayout(bottom_row)
+
+        root_layout.addWidget(self.card)
+
+    def update_profile(self, name, status_type, status_msg):
+        self.name_lbl.setText(f"Employee: {name}")
+        if status_type == "connected":
+            self.status_lbl.setText(f"🟢 {status_msg}")
+            self.status_lbl.setStyleSheet("font-size: 11px; color: #10B981; border: none; background: transparent;")
+        elif status_type == "connecting":
+            self.status_lbl.setText(f"🟡 {status_msg}")
+            self.status_lbl.setStyleSheet("font-size: 11px; color: #F59E0B; border: none; background: transparent;")
+        else:
+            self.status_lbl.setText(f"🔴 {status_msg}")
+            self.status_lbl.setStyleSheet("font-size: 11px; color: #EF4444; border: none; background: transparent;")
+
+    def refresh_users_list(self, peers):
+        while self.users_vbox.count():
+            item = self.users_vbox.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        my_id = f"{socket.gethostname()}_{getattr(self.client_app, 'local_ip', Config.get_local_ip())}"
+        filtered = []
+        seen = set()
+        for p in peers:
+            cid = p.get("client_id", "")
+            if cid == my_id or p.get("name") == self.client_app.client_name:
+                continue
+            if cid not in seen:
+                seen.add(cid)
+                filtered.append(p)
+
+        self.peers_title.setText(f"👥 Connected Colleagues ({len(filtered)} Online)")
+
+        if not filtered:
+            empty_card = QFrame()
+            empty_card.setStyleSheet("""
+                QFrame {
+                    background: rgba(15, 23, 42, 0.4);
+                    border: 1px dashed rgba(71, 85, 105, 0.6);
+                    border-radius: 10px;
+                    padding: 24px;
+                }
+            """)
+            empty_layout = QVBoxLayout(empty_card)
+            lbl = QLabel("📡 No other colleagues currently online on LAN.")
+            lbl.setStyleSheet("color: #64748B; font-size: 12px; font-style: italic; border: none; background: transparent;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.addWidget(lbl)
+            self.users_vbox.addWidget(empty_card)
+            self.users_vbox.addStretch()
+            return
+
+        for p in filtered:
+            p_id = p.get("client_id")
+            p_name = p.get("name", "User PC")
+            p_ip = p.get("ip", "")
+
+            user_card = QFrame()
+            user_card.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(30, 41, 59, 0.85);
+                    border: 1px solid rgba(51, 65, 85, 0.9);
+                    border-radius: 10px;
+                }
+            """)
+            u_layout = QVBoxLayout(user_card)
+            u_layout.setContentsMargins(12, 10, 12, 10)
+            u_layout.setSpacing(8)
+
+            # Top Row: PC Name & IP badge
+            top_row = QHBoxLayout()
+            name_lbl = QLabel(f"🖥️ {p_name}")
+            name_lbl.setStyleSheet("font-size: 13px; font-weight: 700; color: #F8FAFC; border: none; background: transparent;")
+            top_row.addWidget(name_lbl)
+            top_row.addStretch()
+
+            ip_badge = QLabel(p_ip)
+            ip_badge.setStyleSheet("""
+                font-size: 11px;
+                color: #94A3B8;
+                background-color: rgba(15, 23, 42, 0.6);
+                border: 1px solid rgba(71, 85, 105, 0.5);
+                border-radius: 5px;
+                padding: 2px 6px;
+            """)
+            top_row.addWidget(ip_badge)
+            u_layout.addLayout(top_row)
+
+            # Button Row: "Access Screen" and "Share My Screen"
+            btn_row = QHBoxLayout()
+            btn_row.setSpacing(8)
+
+            access_btn = QPushButton("👁️ Access Screen")
+            access_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            access_btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(0, 243, 255, 0.15);
+                    border: 1px solid #00F3FF;
+                    border-radius: 6px;
+                    color: #00F3FF;
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 8px 10px;
+                }
+                QPushButton:hover {
+                    background: rgba(0, 243, 255, 0.35);
+                    color: #FFFFFF;
+                }
+            """)
+            access_btn.clicked.connect(lambda checked, tid=p_id, tname=p_name: (self.client_app.request_peer_share(tid, tname, "access_screen"), self.hide()))
+            btn_row.addWidget(access_btn)
+
+            share_btn = QPushButton("↗️ Share My Screen")
+            share_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            share_btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(16, 185, 129, 0.15);
+                    border: 1px solid #10B981;
+                    border-radius: 6px;
+                    color: #10B981;
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 8px 10px;
+                }
+                QPushButton:hover {
+                    background: rgba(16, 185, 129, 0.35);
+                    color: #FFFFFF;
+                }
+            """)
+            share_btn.clicked.connect(lambda checked, tid=p_id, tname=p_name: (self.client_app.request_peer_share(tid, tname, "share_my_screen"), self.hide()))
+            btn_row.addWidget(share_btn)
+
+            u_layout.addLayout(btn_row)
+            self.users_vbox.addWidget(user_card)
+
+        self.users_vbox.addStretch()
+
+    def show_above_tray(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        tray_geom = self.client_app.tray.geometry()
+        
+        w = self.width()
+        h = self.height()
+        
+        if tray_geom.isValid() and tray_geom.x() > 0:
+            x = tray_geom.x() - (w // 2) + (tray_geom.width() // 2)
+            y = tray_geom.y() - h - 10
+        else:
+            x = screen.right() - w - 16
+            y = screen.bottom() - h - 16
+
+        # Keep strictly within screen bounds
+        x = max(screen.left() + 10, min(x, screen.right() - w - 10))
+        y = max(screen.top() + 10, min(y, screen.bottom() - h - 10))
+
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+
 class EmployeeClientTrayApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -1077,8 +1474,9 @@ class EmployeeClientTrayApp(QWidget):
         self.current_prompt_dialog = None
 
         self.enable_auto_startup()
-
         self.load_settings()
+
+        self.panel = ClientMessengerPanel(self)
         self.init_tray()
 
         # On first launch, require both employee name and server IP
@@ -1136,86 +1534,65 @@ class EmployeeClientTrayApp(QWidget):
             self.tray.setIcon(QIcon(create_tray_icon_pixmap("#00F3FF")))
         self.tray.setToolTip(f"{Config.APP_NAME} - {self.client_name}")
 
+        self.tray.activated.connect(self.on_tray_activated)
+
         menu = QMenu()
-        
-        self.name_action = menu.addAction(f"👤 Employee: {self.client_name}")
-        self.name_action.setEnabled(False)
-
-        self.status_action = menu.addAction("Status: Initializing...")
-        self.status_action.setEnabled(False)
-        
-        menu.addSeparator()
-
-        self.users_menu = menu.addMenu("👥 Connected Users (0)")
-        self.rebuild_users_menu()
+        open_panel_action = menu.addAction("🛡️ Open Overwatch Panel")
+        open_panel_action.triggered.connect(self.toggle_panel)
 
         menu.addSeparator()
 
-        change_name_action = menu.addAction("Set Employee Name...")
+        change_name_action = menu.addAction("👤 Set Employee Name...")
         change_name_action.triggered.connect(self.prompt_employee_name)
 
-        change_server_action = menu.addAction("Configure Master Server IP...")
+        change_server_action = menu.addAction("⚙️ Configure Master Server IP...")
         change_server_action.triggered.connect(self.prompt_server_ip)
 
         menu.addSeparator()
 
-        quit_action = menu.addAction("Exit Client")
+        quit_action = menu.addAction("🚪 Exit Client")
         quit_action.triggered.connect(self.quit_app)
 
         self.tray.setContextMenu(menu)
         self.tray.show()
 
-    def rebuild_users_menu(self):
-        self.users_menu.clear()
-        my_id = f"{socket.gethostname()}_{getattr(self, 'local_ip', Config.get_local_ip())}"
+    def on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, 
+                      QSystemTrayIcon.ActivationReason.DoubleClick, 
+                      QSystemTrayIcon.ActivationReason.Context):
+            self.toggle_panel()
 
-        filtered_peers = []
-        seen = set()
-        for p in self.connected_users:
-            cid = p.get("client_id", "")
-            if cid == my_id or p.get("name") == self.client_name:
-                continue
-            if cid not in seen:
-                seen.add(cid)
-                filtered_peers.append(p)
+    def toggle_panel(self):
+        if self.panel.isVisible():
+            self.panel.hide()
+        else:
+            self.panel.refresh_users_list(self.connected_users)
+            self.panel.show_above_tray()
 
-        self.users_menu.setTitle(f"👥 Connected Users ({len(filtered_peers)})")
-
-        if not filtered_peers:
-            empty_act = self.users_menu.addAction("(No other users connected)")
-            empty_act.setEnabled(False)
-            return
-
-        for p in filtered_peers:
-            p_id = p.get("client_id")
-            p_name = p.get("name", "User PC")
-            p_ip = p.get("ip", "")
-            sub = self.users_menu.addMenu(f"🖥️ {p_name} ({p_ip})")
-            
-            view_act = sub.addAction("👁️ Request Screen View")
-            view_act.triggered.connect(lambda checked, tid=p_id, tname=p_name: self.request_peer_share(tid, tname, "view"))
-            
-            ctrl_act = sub.addAction("🎮 Request Remote Control")
-            ctrl_act.triggered.connect(lambda checked, tid=p_id, tname=p_name: self.request_peer_share(tid, tname, "control"))
-
-    def request_peer_share(self, target_id, target_name, mode):
+    def request_peer_share(self, target_id, target_name, action_type="access_screen"):
         if not self.worker or not self.worker.ws:
             QMessageBox.warning(self, "Not Connected", "You are not currently connected to the Master Server.")
             return
-        self.worker.send_peer_share_request(target_id, mode)
-        perm_title = "Remote Control" if mode == "control" else "Screen View"
+        self.worker.send_peer_share_request(target_id, action_type=action_type)
+        if action_type == "share_my_screen":
+            title_text = "Screen Share Offered"
+            msg_text = f"Sent screen share invitation to {target_name}. Waiting for approval..."
+        else:
+            title_text = "Screen Access Requested"
+            msg_text = f"Sent screen access request to {target_name}. Waiting for approval..."
+
         self.tray.showMessage(
-            "Request Sent",
-            f"Sent {perm_title} request to {target_name}. Waiting for approval...",
+            title_text,
+            msg_text,
             QSystemTrayIcon.MessageIcon.Information,
             4000
         )
 
     def on_client_list_updated(self, clients):
         self.connected_users = clients
-        self.rebuild_users_menu()
+        self.panel.refresh_users_list(clients)
 
-    def on_peer_prompt_received(self, req_id, req_id_str, req_name, target_id, mode):
+    def on_peer_prompt_received(self, req_id, req_id_str, req_name, target_id, action_type):
         if self.current_prompt_dialog:
             try:
                 self.current_prompt_dialog.close()
@@ -1223,10 +1600,10 @@ class EmployeeClientTrayApp(QWidget):
             except Exception:
                 pass
 
-        dlg = RequestPromptDialog(req_id, req_id_str, req_name, target_id, mode, parent=self)
+        dlg = RequestPromptDialog(req_id, req_id_str, req_name, target_id, action_type, parent=self)
         self.current_prompt_dialog = dlg
-        dlg.accepted_signal.connect(lambda r_id, r_id_s, t_id, m: self.worker.send_peer_prompt_response(r_id, r_id_s, t_id, True, m))
-        dlg.declined_signal.connect(lambda r_id, r_id_s, t_id, m: self.worker.send_peer_prompt_response(r_id, r_id_s, t_id, False, m))
+        dlg.accepted_signal.connect(lambda r_id, r_id_s, t_id, act: self.worker.send_peer_prompt_response(r_id, r_id_s, t_id, True, act))
+        dlg.declined_signal.connect(lambda r_id, r_id_s, t_id, act: self.worker.send_peer_prompt_response(r_id, r_id_s, t_id, False, act))
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
@@ -1298,7 +1675,7 @@ class EmployeeClientTrayApp(QWidget):
             viewer.deleteLater()
 
     def on_status_changed(self, status_type, message):
-        self.status_action.setText(f"Status: {message}")
+        self.panel.update_profile(self.client_name, status_type, message)
         if status_type == "connected":
             self.tray.setIcon(QIcon(create_tray_icon_pixmap("#10B981"))) # Green
         elif status_type == "connecting":
@@ -1323,7 +1700,7 @@ class EmployeeClientTrayApp(QWidget):
         if ok and name.strip():
             self.client_name = name.strip()
             self.has_custom_name = True
-            self.name_action.setText(f"👤 Employee: {self.client_name}")
+            self.panel.name_lbl.setText(f"Employee: {self.client_name}")
             self.tray.setToolTip(f"{Config.APP_NAME} - {self.client_name}")
             self.save_settings()
             if not first_time and self.worker:
@@ -1348,6 +1725,7 @@ class EmployeeClientTrayApp(QWidget):
     def quit_app(self):
         if self.worker:
             self.worker.stop()
+        self.panel.hide()
         self.tray.hide()
         QApplication.quit()
 
@@ -1363,14 +1741,12 @@ class EmployeeClientTrayApp(QWidget):
                 )
                 cmd = f'"{exe_path}"'
                 winreg.SetValueEx(key, "Overwatch", 0, winreg.REG_SZ, cmd)
-                # Remove old legacy key name if it exists
                 try:
                     winreg.DeleteValue(key, "LANScreenMonitor")
                 except Exception:
                     pass
                 winreg.CloseKey(key)
             elif sys.platform == "darwin":
-                # macOS LaunchAgent plist auto startup
                 plist_dir = os.path.expanduser("~/Library/LaunchAgents")
                 os.makedirs(plist_dir, exist_ok=True)
                 plist_path = os.path.join(plist_dir, "com.blackbox.overwatch.plist")
@@ -1400,7 +1776,7 @@ class EmployeeClientTrayApp(QWidget):
 def main():
     if sys.platform == "win32":
         import ctypes
-        myappid = "blackbox.overwatch.lanmonitor.4_50_1"
+        myappid = "blackbox.overwatch.lanmonitor.4_50_2"
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)

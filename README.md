@@ -1,6 +1,6 @@
 # 🛡️ Overwatch - LAN Live Screen Monitoring & Remote Management System
 
-[![Version](https://img.shields.io/badge/version-4.50.1-blue.svg?style=flat-square)](https://github.com/jimhpar/OverWatch_Mac/releases)
+[![Version](https://img.shields.io/badge/version-4.50.2-blue.svg?style=flat-square)](https://github.com/jimhpar/OverWatch_Lan_Remote/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-informational.svg?style=flat-square)](https://github.com/jimhpar/OverWatch_Mac/releases)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.14-success.svg?style=flat-square)](https://www.python.org/)
 [![GUI Framework](https://img.shields.io/badge/GUI-PyQt6-blueviolet.svg?style=flat-square)](https://www.riverbankcomputing.com/software/pyqt/)
